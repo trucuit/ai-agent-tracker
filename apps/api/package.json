@@ -14,7 +14,10 @@
   "dependencies": {
     "@ai-tracker/db": "workspace:*",
     "@ai-tracker/shared": "workspace:*",
+    "@octokit/plugin-throttling": "^11.0.3",
+    "@octokit/rest": "^22.0.1",
     "dotenv": "^16.4.7",
+    "drizzle-orm": "^0.38.4",
     "express": "^5.1.0",
     "pino": "^9.6.0",
     "pino-http": "^10.4.0",
