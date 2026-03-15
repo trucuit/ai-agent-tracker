@@ -1,4 +1,4 @@
-import { desc, eq, gte, sql } from "drizzle-orm";
+import { desc, eq, sql } from "drizzle-orm";
 import type { Db } from "@ai-tracker/db";
 import { repositories, repositoryStats, trendingSnapshots } from "@ai-tracker/db";
 
@@ -11,9 +11,11 @@ interface ScoredRepo {
  * Compute trending scores for daily/weekly/monthly periods and persist snapshots.
  *
  * Scoring formula (weighted sum):
- *   - Stars growth (primary signal): 60%
- *   - Absolute stars (popularity): 25%
- *   - Recency (recently pushed): 15%
+ *   - Stars growth (primary signal): 50%
+ *   - Forks (collaboration signal): 15%
+ *   - Issues activity (engagement signal): 10%
+ *   - Absolute stars (popularity): 15%
+ *   - Recency (recently pushed): 10%
  */
 export async function computeAndStoreTrending(db: Db): Promise<void> {
   const periods: Array<{ period: "daily" | "weekly" | "monthly"; days: number }> = [
@@ -53,13 +55,13 @@ export async function computeAndStoreTrending(db: Db): Promise<void> {
 }
 
 async function scoreRepos(db: Db, days: number): Promise<ScoredRepo[]> {
-  const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
-
   // Get all repos with their latest stats
   const rows = await db
     .select({
       id: repositories.id,
       stars: repositories.stars,
+      forks: repositories.forks,
+      openIssues: repositories.openIssues,
       pushedAt: repositories.pushedAt,
       starsGrowth1d: repositoryStats.starsGrowth1d,
       starsGrowth7d: repositoryStats.starsGrowth7d,
@@ -88,7 +90,7 @@ async function scoreRepos(db: Db, days: number): Promise<ScoredRepo[]> {
   for (const row of rows) {
     if (scored.has(row.id)) continue;
 
-    // Stars growth signal (based on period)
+    // Stars growth signal (period-specific)
     let growthSignal = 0;
     if (days === 1) growthSignal = row.starsGrowth1d ?? 0;
     else if (days === 7) growthSignal = row.starsGrowth7d ?? 0;
@@ -97,6 +99,12 @@ async function scoreRepos(db: Db, days: number): Promise<ScoredRepo[]> {
     // Normalize growth (logarithmic to handle outliers)
     const growthScore = growthSignal > 0 ? Math.log10(growthSignal + 1) * 100 : 0;
 
+    // Forks: collaboration signal (logarithmic)
+    const forksScore = row.forks > 0 ? Math.log10(row.forks + 1) * 100 : 0;
+
+    // Issues activity: open issues signal engagement (logarithmic, capped to avoid noise)
+    const issuesScore = row.openIssues > 0 ? Math.min(Math.log10(row.openIssues + 1) * 100, 100) : 0;
+
     // Stars popularity score (logarithmic)
     const popularityScore = row.stars > 0 ? Math.log10(row.stars + 1) * 100 : 0;
 
@@ -104,7 +112,12 @@ async function scoreRepos(db: Db, days: number): Promise<ScoredRepo[]> {
     const pushedAgo = (now - new Date(row.pushedAt).getTime()) / (1000 * 60 * 60 * 24);
     const recencyScore = Math.max(0, (1 - pushedAgo / maxAgeDays) * 100);
 
-    const score = growthScore * 0.6 + popularityScore * 0.25 + recencyScore * 0.15;
+    const score =
+      growthScore * 0.5 +
+      forksScore * 0.15 +
+      issuesScore * 0.1 +
+      popularityScore * 0.15 +
+      recencyScore * 0.1;
 
     scored.set(row.id, { repositoryId: row.id, score });
   }
